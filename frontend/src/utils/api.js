@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = 'https://your-railway-app.up.railway.app/api';
+const API_URL = 'prime-coop-production.up.railway.app';
 
 const api = axios.create({
   baseURL: API_URL,
