@@ -124,7 +124,7 @@ async def admin_apply_loan(
 
 
 # ─── Member applies for loan ──────────────────────────────────────────────────
-@router.post("/", response_model=LoanResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=LoanResponse, status_code=status.HTTP_201_CREATED)
 async def apply_for_loan(
     loan_data: LoanCreate,
     current_user: dict = Depends(get_current_active_user),
@@ -202,7 +202,7 @@ async def apply_for_loan(
     return created_loan
 
 
-@router.get("/")
+@router.get("")
 async def get_loans(
     status: Optional[str] = Query(None),
     loanType: Optional[str] = Query(None),
