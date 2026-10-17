@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database import connect_to_mongo, close_mongo_connection
 from .routes import auth, dashboard, loans, users, savings, dividends, attendance, reports, notifications
 
-app = FastAPI(title="Prime Coop API", version="1.0.0")
+app = FastAPI(title="Prime Coop API", version="1.0.0", redirect_slashes=False)
 
 app.add_middleware(
     CORSMiddleware,
