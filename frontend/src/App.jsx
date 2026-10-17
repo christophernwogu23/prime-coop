@@ -11,6 +11,7 @@ import Savings from './pages/Savings';
 import Dividends from './pages/Dividends';
 import Attendance from './pages/Attendance';
 import Reports from './pages/Reports';
+import Notifications from './pages/Notifications'
 
 function App() {
   return (
@@ -74,6 +75,14 @@ function App() {
             <ProtectedRoute adminOnly>
               <Layout>
                 <Reports />
+              </Layout>
+            </ProtectedRoute>
+          } />
+
+          <Route path="/notifications" element={
+            <ProtectedRoute>
+              <Layout>
+                <Notifications />
               </Layout>
             </ProtectedRoute>
           } />

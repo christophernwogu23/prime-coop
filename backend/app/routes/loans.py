@@ -3,25 +3,24 @@ from typing import Optional
 from ..database import get_database
 from ..utils.auth import get_current_active_user, require_admin
 from ..models.loan import LoanCreate, LoanUpdate, LoanResponse, PaymentCreate, PaymentResponse
+from .notifications import create_notification
 from bson import ObjectId
 from datetime import datetime
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/loans", tags=["Loans"])
 
-# ─── New model for admin loan application ────────────────────────────────────
 class AdminLoanCreate(BaseModel):
-    userId: str                          # borrower
+    userId: str
     loanType: str
     amount: float
     interestRate: float
     repaymentSchedule: int
     purpose: Optional[str] = ""
     applicationDate: Optional[datetime] = None
-    guarantor1Id: Optional[str] = None  # optional, for record only
-    guarantor2Id: Optional[str] = None  # optional, for record only
+    guarantor1Id: Optional[str] = None
+    guarantor2Id: Optional[str] = None
 
-# ─── Helpers ─────────────────────────────────────────────────────────────────
 def serialize_loan(loan):
     if not loan:
         return None
@@ -46,26 +45,20 @@ def calculate_loan_details(amount: float, interest_rate: float, months: int):
     monthly_payment = total_repayment / months if months > 0 else total_repayment
     return {"totalRepaymentAmount": total_repayment, "monthlyPayment": monthly_payment}
 
+def fmt_amount(amount: float) -> str:
+    return f"₦{amount:,.2f}"
 
-# ─── NEW: Admin applies loan for a member ────────────────────────────────────
+
+# ─── Admin applies loan for a member ─────────────────────────────────────────
 @router.post("/admin-apply", status_code=status.HTTP_201_CREATED)
 async def admin_apply_loan(
     loan_data: AdminLoanCreate,
     current_user: dict = Depends(require_admin),
     db = Depends(get_database)
 ):
-    """
-    Admin applies a loan on behalf of any member.
-    - No guarantor approval required
-    - Loan is granted immediately
-    - Guarantors (if provided) are stored on the record for reference only
-    """
-
-    # Validate loan type
     if loan_data.loanType not in ["General", "Equipment", "Executive"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid loan type")
 
-    # Validate borrower
     try:
         borrower = await db.users.find_one({"_id": ObjectId(loan_data.userId)})
     except:
@@ -74,7 +67,6 @@ async def admin_apply_loan(
     if not borrower:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Borrower not found")
 
-    # Resolve guarantors (optional — for record only, no approval needed)
     guarantors = []
     for g_id in [loan_data.guarantor1Id, loan_data.guarantor2Id]:
         if g_id:
@@ -87,13 +79,11 @@ async def admin_apply_loan(
             guarantors.append({
                 "userId": ObjectId(g_id),
                 "name": g_user.get("name", "Unknown"),
-                "status": "approved",       # pre-approved — no action needed
+                "status": "approved",
                 "approvedAt": datetime.utcnow()
             })
 
-    # Calculate repayment
     loan_calc = calculate_loan_details(loan_data.amount, loan_data.interestRate, loan_data.repaymentSchedule)
-
     application_date = loan_data.applicationDate if loan_data.applicationDate else datetime.utcnow()
 
     loan_dict = {
@@ -106,26 +96,34 @@ async def admin_apply_loan(
         "totalRepaymentAmount": loan_calc["totalRepaymentAmount"],
         "monthlyPayment":       loan_calc["monthlyPayment"],
         "remainingBalance":     loan_calc["totalRepaymentAmount"],
-        "status":               "granted",          # ✅ immediately granted
+        "status":               "granted",
         "paymentProgress":      0.0,
-        "guarantors":           guarantors,          # stored for reference
+        "guarantors":           guarantors,
         "disbursementDate":     datetime.utcnow(),
         "approvalDate":         datetime.utcnow(),
         "approvedBy":           ObjectId(current_user["_id"]),
-        "appliedByAdmin":       True,               # flag so UI can distinguish
+        "appliedByAdmin":       True,
         "createdAt":            application_date,
         "updatedAt":            datetime.utcnow(),
     }
 
     result = await db.loans.insert_one(loan_dict)
     created_loan = await db.loans.find_one({"_id": result.inserted_id})
-    serialize_loan(created_loan)
 
+    # ✅ Notify the member their loan has been granted
+    await create_notification(
+        db, loan_data.userId,
+        "loan_granted",
+        "Loan Granted 🎉",
+        f"Your {loan_data.loanType} loan of {fmt_amount(loan_data.amount)} has been granted by the admin.",
+        str(result.inserted_id)
+    )
+
+    serialize_loan(created_loan)
     return created_loan
 
 
-# ─── Existing routes (unchanged) ─────────────────────────────────────────────
-
+# ─── Member applies for loan ──────────────────────────────────────────────────
 @router.post("/", response_model=LoanResponse, status_code=status.HTTP_201_CREATED)
 async def apply_for_loan(
     loan_data: LoanCreate,
@@ -154,8 +152,6 @@ async def apply_for_loan(
     if loan_data.guarantor1Id == loan_data.guarantor2Id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Guarantors must be different people")
 
-    # ✅ Block application if user already has an active loan
-    # Active = any loan not yet completed or rejected
     active_loan = await db.loans.find_one({
         "userId": ObjectId(current_user["_id"]),
         "status": {"$in": ["guarantor_approval", "pending", "approved", "granted"]}
@@ -189,6 +185,19 @@ async def apply_for_loan(
 
     result = await db.loans.insert_one(loan_dict)
     created_loan = await db.loans.find_one({"_id": result.inserted_id})
+    loan_id_str = str(result.inserted_id)
+
+    # ✅ Notify both guarantors they have a pending request
+    applicant_name = current_user.get("name", "A member")
+    for g_id, g_user in [(loan_data.guarantor1Id, guarantor1), (loan_data.guarantor2Id, guarantor2)]:
+        await create_notification(
+            db, g_id,
+            "guarantor_request",
+            "Guarantor Request 🤝",
+            f"{applicant_name} has requested you as a guarantor for a {loan_data.loanType} loan of {fmt_amount(loan_data.amount)}.",
+            loan_id_str
+        )
+
     serialize_loan(created_loan)
     return created_loan
 
@@ -301,7 +310,6 @@ async def get_loan(
                     "message": g.get("message", "")
                 })
 
-    # Also pull guarantors stored directly on the loan (admin-applied loans)
     if not guarantors_list and loan.get("guarantors"):
         for g in loan.get("guarantors", []):
             g_user_id = g.get("userId")
@@ -384,10 +392,40 @@ async def respond_to_guarantee(
     all_approved = all(g["status"] == "approved" for g in updated_loan.get("guarantors", []))
     any_rejected = any(g["status"] == "rejected" for g in updated_loan.get("guarantors", []))
 
+    borrower_id = str(loan["userId"])
+    guarantor_name = current_user.get("name", "Your guarantor")
+    loan_type = loan.get("loanType", "")
+    amount = loan.get("amount", 0)
+
     if any_rejected:
         await db.loans.update_one({"_id": loan_obj_id}, {"$set": {"status": "rejected", "updatedAt": datetime.utcnow()}})
+        # ✅ Notify borrower — guarantor rejected
+        await create_notification(
+            db, borrower_id,
+            "guarantor_rejected",
+            "Guarantor Declined ❌",
+            f"{guarantor_name} has declined to be a guarantor for your {loan_type} loan of {fmt_amount(amount)}.",
+            loan_id
+        )
     elif all_approved:
         await db.loans.update_one({"_id": loan_obj_id}, {"$set": {"status": "pending", "updatedAt": datetime.utcnow()}})
+        # ✅ Notify borrower — all guarantors approved, awaiting admin
+        await create_notification(
+            db, borrower_id,
+            "guarantor_approved",
+            "Guarantors Approved ✅",
+            f"All guarantors have approved your {loan_type} loan of {fmt_amount(amount)}. It is now awaiting admin approval.",
+            loan_id
+        )
+    else:
+        # One approved, still waiting for the other
+        await create_notification(
+            db, borrower_id,
+            "guarantor_approved",
+            "Guarantor Approved ✅",
+            f"{guarantor_name} has approved your {loan_type} loan request. Waiting for the second guarantor.",
+            loan_id
+        )
 
     final_loan = await db.loans.find_one({"_id": loan_obj_id})
     serialize_loan(final_loan)
@@ -417,6 +455,15 @@ async def approve_loan(
         {"$set": {"status": "granted", "approvalDate": datetime.utcnow(), "updatedAt": datetime.utcnow()}}
     )
 
+    # ✅ Notify member their loan has been granted
+    await create_notification(
+        db, str(loan["userId"]),
+        "loan_granted",
+        "Loan Granted 🎉",
+        f"Your {loan.get('loanType')} loan of {fmt_amount(loan.get('amount', 0))} has been granted. Funds will be disbursed shortly.",
+        loan_id
+    )
+
     updated_loan = await db.loans.find_one({"_id": loan_obj_id})
     serialize_loan(updated_loan)
     return updated_loan
@@ -433,7 +480,20 @@ async def reject_loan(
     except:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid loan ID")
 
+    loan = await db.loans.find_one({"_id": loan_obj_id})
+
     await db.loans.update_one({"_id": loan_obj_id}, {"$set": {"status": "rejected", "updatedAt": datetime.utcnow()}})
+
+    # ✅ Notify member their loan was rejected
+    if loan:
+        await create_notification(
+            db, str(loan["userId"]),
+            "loan_rejected",
+            "Loan Rejected ❌",
+            f"Your {loan.get('loanType')} loan application of {fmt_amount(loan.get('amount', 0))} has been rejected by the admin.",
+            loan_id
+        )
+
     updated_loan = await db.loans.find_one({"_id": loan_obj_id})
     serialize_loan(updated_loan)
     return updated_loan
@@ -520,7 +580,6 @@ async def record_payment(
             detail="Cannot record payment for this loan status. Loan must be granted first."
         )
 
-    # ✅ Calculate new_balance FIRST
     new_balance = loan["remainingBalance"] - payment_data.amount
     payment_progress = ((loan["totalRepaymentAmount"] - new_balance) / loan["totalRepaymentAmount"]) * 100
 
@@ -547,6 +606,17 @@ async def record_payment(
         update_data["status"] = "completed"
 
     await db.loans.update_one({"_id": loan_obj_id}, {"$set": update_data})
+
+    # ✅ Notify member a payment was recorded
+    status_msg = "Your loan is now fully paid off! 🎊" if new_balance <= 0 else f"Remaining balance: {fmt_amount(max(0, new_balance))}."
+    await create_notification(
+        db, str(loan["userId"]),
+        "payment_recorded",
+        "Payment Recorded 💰",
+        f"A payment of {fmt_amount(payment_data.amount)} has been recorded on your {loan.get('loanType')} loan. {status_msg}",
+        loan_id
+    )
+
     return {"message": "Payment recorded successfully"}
 
 

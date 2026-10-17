@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .database import connect_to_mongo, close_mongo_connection
-from .routes import auth, dashboard, loans, users, savings, dividends, attendance, reports
+from .routes import auth, dashboard, loans, users, savings, dividends, attendance, reports, notifications
 
 app = FastAPI(title="Prime Coop API", version="1.0.0")
 
@@ -37,6 +37,7 @@ app.include_router(savings.router)
 app.include_router(dividends.router)
 app.include_router(attendance.router)
 app.include_router(reports.router)
+app.include_router(notifications.router)
 
 @app.get("/")
 async def root():
