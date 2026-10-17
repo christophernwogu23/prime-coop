@@ -10,34 +10,50 @@ import {
   FileText,
   LogOut,
   Menu,
-  X
+  X,
+  Bell
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import api from '../utils/api';
 
 export default function Sidebar() {
   const location = useLocation();
-  const { user, logout, isAdmin, isExecutive } = useAuth();
+  const { user, logout, isAdmin } = useAuth();
   const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    fetchUnreadCount();
+    // Poll every 60 seconds for new notifications
+    const interval = setInterval(fetchUnreadCount, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const fetchUnreadCount = async () => {
+    try {
+      const response = await api.get('/notifications/unread-count');
+      setUnreadCount(response.data.unreadCount || 0);
+    } catch (error) {
+      // Silently fail — badge just won't show
+    }
+  };
 
   const menuItems = [
-    { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'executive', 'user'] },
-    { path: '/users', label: 'Users', icon: Users, roles: ['admin'] },
-    { path: '/loans', label: 'Loans', icon: Wallet, roles: ['admin', 'executive', 'user'] },
-    { path: '/savings', label: 'Savings', icon: PiggyBank, roles: ['admin', 'executive', 'user'] },
-    { path: '/dividends', label: 'Dividends', icon: TrendingUp, roles: ['admin'] },
-    { path: '/attendance', label: 'Attendance', icon: Calendar, roles: ['admin'] },
-    { path: '/reports', label: 'Reports', icon: FileText, roles: ['admin'] },
+    { path: '/dashboard',     label: 'Dashboard',    icon: LayoutDashboard, roles: ['admin', 'executive', 'member', 'user'] },
+    { path: '/users',         label: 'Users',         icon: Users,           roles: ['admin'] },
+    { path: '/loans',         label: 'Loans',         icon: Wallet,          roles: ['admin', 'executive', 'member', 'user'] },
+    { path: '/savings',       label: 'Savings',       icon: PiggyBank,       roles: ['admin', 'executive', 'member', 'user'] },
+    { path: '/dividends',     label: 'Dividends',     icon: TrendingUp,      roles: ['admin'] },
+    { path: '/attendance',    label: 'Attendance',    icon: Calendar,        roles: ['admin'] },
+    { path: '/reports',       label: 'Reports',       icon: FileText,        roles: ['admin'] },
+    { path: '/notifications', label: 'Notifications', icon: Bell,            roles: ['admin', 'executive', 'member', 'user'] },
   ];
 
-  const filteredMenuItems = menuItems.filter(item => 
+  const filteredMenuItems = menuItems.filter(item =>
     item.roles.includes(user?.role)
   );
 
   const isActive = (path) => location.pathname === path;
-
-  const handleLogout = () => {
-    logout();
-  };
 
   return (
     <>
@@ -90,11 +106,15 @@ export default function Sidebar() {
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
           {filteredMenuItems.map((item) => {
             const Icon = item.icon;
+            const isNotifications = item.path === '/notifications';
             return (
               <Link
                 key={item.path}
                 to={item.path}
-                onClick={() => setIsMobileOpen(false)}
+                onClick={() => {
+                  setIsMobileOpen(false);
+                  if (isNotifications) setUnreadCount(0);
+                }}
                 className={`
                   flex items-center gap-3 px-4 py-3 rounded-lg transition-colors
                   ${isActive(item.path)
@@ -104,7 +124,13 @@ export default function Sidebar() {
                 `}
               >
                 <Icon size={20} />
-                <span>{item.label}</span>
+                <span className="flex-1">{item.label}</span>
+                {/* Unread badge on Notifications link */}
+                {isNotifications && unreadCount > 0 && (
+                  <span className="ml-auto px-2 py-0.5 text-xs bg-red-500 text-white rounded-full font-medium min-w-[20px] text-center">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
               </Link>
             );
           })}
@@ -113,7 +139,7 @@ export default function Sidebar() {
         {/* Logout Button */}
         <div className="p-4 border-t border-gray-200">
           <button
-            onClick={handleLogout}
+            onClick={logout}
             className="w-full flex items-center gap-3 px-4 py-3 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
           >
             <LogOut size={20} />
